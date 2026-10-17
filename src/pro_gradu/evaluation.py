@@ -61,8 +61,12 @@ def default_model_specs(
             "model__n_neighbors": [3, 5, 9, 15, 21, 31], "model__weights": ["uniform", "distance"],
             "model__p": [1, 2]
         }),
-        ("RBF support vector machine", SVC(probability=True, random_state=random_state), {
-            "model__C": [0.1, 1.0, 10.0], "model__gamma": ["scale", 0.01, 0.1]
+        ("RBF support vector machine", CalibratedClassifierCV(
+            estimator=SVC(probability=False, random_state=random_state),
+            method="sigmoid", cv=3, ensemble=False,
+        ), {
+            "model__estimator__C": [0.1, 1.0, 10.0],
+            "model__estimator__gamma": ["scale", 0.01, 0.1],
         }),
         ("Calibrated linear support vector machine", CalibratedClassifierCV(
             estimator=LinearSVC(max_iter=5000, random_state=random_state), cv=3

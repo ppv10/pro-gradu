@@ -55,3 +55,15 @@ def test_curated_benchmark_covers_major_classifier_families_with_paired_selectio
     assert len(names) >= 12
     assert {False, True} == {spec.select_features for spec in specs}
     assert all(hasattr(spec.estimator, "predict_proba") for spec in specs)
+
+
+def test_rbf_svc_uses_explicit_calibration_without_deprecated_probability_flag():
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.svm import SVC
+    from pro_gradu.evaluation import default_model_specs
+
+    spec = next(s for s in default_model_specs(False) if s.name == "RBF support vector machine")
+    assert isinstance(spec.estimator, CalibratedClassifierCV)
+    assert spec.estimator.ensemble is False
+    assert spec.estimator.estimator.probability is False
+    assert "model__estimator__C" in spec.param_distributions
