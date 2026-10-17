@@ -13,6 +13,7 @@ The code provides:
 - A broad nested-CV benchmark for 14 classifier families, each compared with and without mutual-information feature selection. Scaling, selection, and parameter searches are fitted inside training folds. The outer folds are paired and held out from tuning.
 - A PyMC Bayesian logistic classifier with fold-local standardization and held-out posterior probabilities.
 - A separate PyMC Weibull accelerated-failure-time model that handles observed events and right-censored follow-up correctly.
+- A callable penalized Cox survival engine with schema validation, saved model artifacts, horizon predictions, nested validation, and a CLI.
 
 This is exploratory research code for a small, observational cohort. Cross-validation is internal validation, not independent replication. Broad algorithm comparisons can favor a model due to sampling noise. Results are not a clinical decision tool.
 
@@ -25,6 +26,8 @@ This is exploratory research code for a small, observational cohort. Cross-valid
 | `hyperparameter_tuning_and_final_models.ipynb` | Paired nested cross-validation benchmark and held-out predictions |
 | `notebooks/bayesian_classification_pymc.ipynb` | Bayesian logistic classification with PyMC |
 | `notebooks/bayesian_survival_analysis.ipynb` | Weibull AFT survival model with right-censoring |
+| `src/pro_gradu/survival.py` | Censoring-aware Cox PH prediction API and nested validation |
+| `src/pro_gradu/cli.py` | Fit, predict, and validate command-line interface |
 | `src/pro_gradu/` | Data validation, feature construction, workflows, model registry, and evaluation |
 | `tests/` | Dataset contract, leakage-sensitive workflow, nested evaluation, and model registry tests |
 
@@ -44,7 +47,17 @@ For the scikit-learn analyses and tests without PyMC:
 uv sync --extra notebooks --extra dev
 ```
 
+Install the PyMC notebook dependencies separately from the fast survival engine:
+
+```powershell
+uv sync --extra notebooks --extra bayesian
+```
+
 The original dataset CSV is included so analyses can run offline. To install the package in editable mode as part of the lockfile environment, `uv sync` handles it automatically.
+
+The survival engine is included in the lightweight `survival` extra and is installed by `uv sync --all-extras`. PyMC is kept in a separate `bayesian` extra so using the engine does not require MCMC dependencies. The engine uses the baseline clinical features as predictors and treats `time` and `DEATH_EVENT` as duration and event outcomes. Prediction input CSVs must contain only the 11 baseline features; follow-up and outcome columns are rejected to prevent leakage.
+
+To install only the survival engine and its tests, use `uv sync --extra survival --extra dev`.
 
 ## Run and reproduce
 
@@ -67,6 +80,32 @@ uv run jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=7
 ```
 
 The nested benchmark writes fold metrics and out-of-fold predictions under `results/`; generated outputs are ignored by Git. Seeds and split definitions are explicit in each notebook. MCMC sampling is stochastic but uses fixed seeds; check the reported convergence diagnostics before interpreting posterior summaries. The PyMC notebooks can take an hour or more on Windows without a PyTensor C++ compiler, especially the four-chain survival fit. A shortened sampling run can check that notebook code executes, but it is not a convergence check.
+
+## Survival prediction engine
+
+Fit and save a ridge-penalized Cox proportional-hazards model from the included cohort:
+
+```powershell
+uv run pro-gradu fit-survival heart_failure_clinical_records_dataset.csv --model-out models/cox.joblib
+```
+
+Create `patients.csv` with one row per person and the 11 baseline feature columns only, then request estimates at supported horizons:
+
+```powershell
+uv run pro-gradu predict-survival patients.csv --model models/cox.joblib --horizons 30,90,180 --output results/predictions.csv
+```
+
+The prediction output is long-form: each input row has a `survival_probability` and `event_risk` (`1 - survival_probability`) for each requested day horizon. Horizons must be positive and cannot exceed the maximum follow-up observed in the training data. The default L2 penalty is 1.0; the nested validation selected it in four of five outer folds, but this small-sample result is not claimed to be globally optimal.
+
+Run nested, event-stratified validation and write fold metrics, one out-of-fold risk score per row, a proportional-hazards diagnostic, and a JSON summary:
+
+```powershell
+uv run pro-gradu validate-survival heart_failure_clinical_records_dataset.csv --output-dir results/survival-validation
+```
+
+Inner folds select the L2 penalty using Harrell's concordance; outer folds estimate held-out concordance. Censored records contribute their observed durations and censoring indicators. The Schoenfeld-residual diagnostic is descriptive, especially with only 299 patients. These internal cross-validation estimates are not external validation, and predictions are exploratory rather than clinical guidance. Only load model artifacts that you trust because joblib artifacts use Python pickle internally.
+
+With the bundled data, seed 42, five outer folds, four inner folds, and penalties `0.01`, `0.1`, and `1.0`, the engine obtained mean outer-fold Harrell concordance of **0.711** (fold SD **0.067**); the most frequently selected penalty was **1.0**. This is a small-cohort internal estimate, not an independent performance claim.
 
 ## Evaluation details
 

@@ -17,6 +17,13 @@ BASELINE_FEATURES = (
     "sex",
     "smoking",
 )
+BINARY_FEATURES = (
+    "anaemia",
+    "diabetes",
+    "high_blood_pressure",
+    "sex",
+    "smoking",
+)
 REQUIRED_COLUMNS = (*BASELINE_FEATURES, "time", "DEATH_EVENT")
 
 

@@ -9,7 +9,7 @@ description = "Reproducible classification and survival analyses for heart failu
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26,<2.3",
-  "pandas>=2.2,<4",
+  "pandas>=2.2,<3",
   "scikit-learn>=1.5,<2",
 ]
 
@@ -19,12 +19,18 @@ notebooks = [
   "nbconvert>=7.16,<8",
 ]
 survival = [
+  "lifelines>=0.30,<0.31",
+]
+bayesian = [
   "pymc>=5.20,<6",
   "arviz>=0.20,<0.23",
   "numba>=0.61,<0.62",
   "matplotlib>=3.9,<4",
 ]
 dev = ["pytest>=8.3,<9"]
+
+[project.scripts]
+pro-gradu = "pro_gradu.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
