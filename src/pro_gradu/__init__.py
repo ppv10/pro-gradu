@@ -7,11 +7,14 @@ from .survival import (
     fit_survival_engine,
     load_survival_engine,
 )
+from .survival_validation import evaluate_survival_models
 
 __all__ = [
     "SurvivalPredictionEngine",
     "evaluate_survival_engine",
+    "evaluate_survival_models",
     "fit_survival_engine",
     "load_dataset",
     "load_survival_engine",
 ]
+

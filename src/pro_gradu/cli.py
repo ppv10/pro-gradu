@@ -10,12 +10,8 @@ from typing import Sequence
 import pandas as pd
 
 from .data import BASELINE_FEATURES, load_dataset
-from .survival import (
-    evaluate_survival_engine,
-    fit_survival_engine,
-    load_survival_engine,
-    proportional_hazards_diagnostic,
-)
+from .survival import fit_survival_engine, load_survival_engine, proportional_hazards_diagnostic
+from .survival_validation import evaluate_survival_models
 
 
 def _parse_float_list(raw: str) -> tuple[float, ...]:
@@ -60,6 +56,12 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--output-dir", required=True, help="directory for validation CSVs")
     validate.add_argument("--outer-folds", type=int, default=5)
     validate.add_argument("--inner-folds", type=int, default=4)
+    validate.add_argument(
+        "--horizons",
+        type=_parse_float_list,
+        default=(90.0, 180.0),
+        help="comma-separated days for IPCW Brier scores and calibration",
+    )
     validate.add_argument(
         "--penalizers", type=_parse_float_list, default=(0.01, 0.1, 1.0)
     )
@@ -110,8 +112,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "validate-survival":
         data = load_dataset(args.data)
-        fold_metrics, predictions = evaluate_survival_engine(
+        fold_metrics, predictions, calibration = evaluate_survival_models(
             data,
+            horizons_days=args.horizons,
             penalizers=args.penalizers,
             outer_folds=args.outer_folds,
             inner_folds=args.inner_folds,
@@ -119,27 +122,95 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        _write_csv(fold_metrics, output_dir / "fold_metrics.csv")
-        _write_csv(
-            predictions.reset_index(names="row_index"),
-            output_dir / "out_of_fold_predictions.csv",
-        )
+        _write_csv(fold_metrics, output_dir / "model_comparison_fold_metrics.csv")
+        _write_csv(predictions, output_dir / "model_comparison_predictions.csv")
+        _write_csv(calibration, output_dir / "calibration.csv")
 
-        chosen_penalty = float(fold_metrics["selected_penalizer"].mode().iloc[0])
-        full_engine = fit_survival_engine(data, penalizer=chosen_penalty)
-        diagnostic = proportional_hazards_diagnostic(full_engine, data)
+        cox_metrics = (
+            fold_metrics.loc[fold_metrics["model"] == "cox_ph"]
+            .drop_duplicates("fold")
+            .loc[
+                :,
+                [
+                    "fold",
+                    "concordance_index",
+                    "selected_penalizer",
+                    "inner_mean_concordance",
+                    "n_train",
+                    "n_test",
+                    "n_test_events",
+                ],
+            ]
+        )
+        _write_csv(cox_metrics, output_dir / "fold_metrics.csv")
+        cox_oof = predictions.loc[
+            (predictions["model"] == "cox_ph")
+            & (predictions["horizon_days"] == float(args.horizons[0]))
+        ].copy()
+        cox_oof = cox_oof.rename(
+            columns={"followup_days": "time", "observed_event": "DEATH_EVENT"}
+        ).set_index("row_index")
+        selected_penalty_by_fold = cox_metrics.set_index("fold")["selected_penalizer"]
+        cox_oof["selected_penalizer"] = cox_oof["fold"].map(
+            selected_penalty_by_fold
+        )
+        cox_oof = cox_oof.loc[
+            :, ["fold", "time", "DEATH_EVENT", "risk_score", "selected_penalizer"]
+        ]
+        _write_csv(cox_oof, output_dir / "out_of_fold_predictions.csv", include_index=True)
+
+        cox_penalties = fold_metrics.loc[
+            fold_metrics["model"] == "cox_ph", "selected_penalizer"
+        ]
+        chosen_penalty = float(cox_penalties.mode().iloc[0])
+        full_cox_engine = fit_survival_engine(data, penalizer=chosen_penalty)
+        diagnostic = proportional_hazards_diagnostic(full_cox_engine, data)
         _write_csv(diagnostic, output_dir / "proportional_hazards.csv")
+
+        model_summaries = {}
+        for model_name, model_rows in fold_metrics.groupby("model", sort=True):
+            horizon_scores = {}
+            model_predictions = predictions.loc[predictions["model"] == model_name]
+            fold_concordance = model_rows.groupby("fold")["concordance_index"].first()
+            for horizon in args.horizons:
+                horizon_rows = model_predictions.loc[
+                    model_predictions["horizon_days"] == float(horizon)
+                ]
+                known = horizon_rows["event_by_horizon"].notna()
+                pooled_brier = float(
+                    (
+                        horizon_rows.loc[known, "ipcw_weight"]
+                        * (
+                            horizon_rows.loc[known, "event_risk"]
+                            - horizon_rows.loc[known, "event_by_horizon"]
+                        ) ** 2
+                    ).sum()
+                    / len(horizon_rows)
+                )
+                horizon_scores[str(float(horizon))] = {
+                    "pooled_ipcw_brier_score": pooled_brier,
+                    "n_known_at_horizon": int(known.sum()),
+                }
+            selected = model_rows["selected_penalizer"]
+            model_summaries[model_name] = {
+                "mean_outer_concordance": float(fold_concordance.mean()),
+                "sd_outer_concordance": float(fold_concordance.std(ddof=1)),
+                "selected_penalizer_mode": float(selected.mode().iloc[0]),
+                "horizons": horizon_scores,
+            }
         summary = {
-            "model_type": "penalized_cox_ph",
+            "models": model_summaries,
             "n_patients": len(data),
             "n_events": int(data["DEATH_EVENT"].sum()),
             "outer_folds": args.outer_folds,
-            "mean_outer_concordance": float(fold_metrics["concordance_index"].mean()),
-            "sd_outer_concordance": float(fold_metrics["concordance_index"].std(ddof=1)),
-            "selected_penalizer_mode": chosen_penalty,
-            "ph_diagnostic_note": (
-                "Schoenfeld-residual p-values are exploratory diagnostics, not proof of assumptions."
+            "inner_folds": args.inner_folds,
+            "horizons_days": [float(value) for value in args.horizons],
+            "legacy_cox_outputs_note": (
+                "fold_metrics.csv and out_of_fold_predictions.csv retain the original Cox-only format."
             ),
+            "ipcw_note": "Censoring distributions are estimated separately in each outer training fold.",
+            "calibration_note": "Cross-fitted IPCW calibration bins are descriptive and may be noisy in this cohort.",
+            "ph_diagnostic_note": "The Schoenfeld-residual diagnostic applies to the full-data Cox fit only.",
         }
         (output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2) + "\n", encoding="utf-8"
@@ -148,3 +219,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     raise AssertionError(f"Unhandled command: {args.command}")
+

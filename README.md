@@ -13,7 +13,7 @@ The code provides:
 - A broad nested-CV benchmark for 14 classifier families, each compared with and without mutual-information feature selection. Scaling, selection, and parameter searches are fitted inside training folds. The outer folds are paired and held out from tuning.
 - A PyMC Bayesian logistic classifier with fold-local standardization and held-out posterior probabilities.
 - A separate PyMC Weibull accelerated-failure-time model that handles observed events and right-censored follow-up correctly.
-- A callable penalized Cox survival engine with schema validation, saved model artifacts, horizon predictions, nested validation, and a CLI.
+- A callable penalized Cox prediction engine plus nested Cox-versus-Weibull AFT validation with censoring-aware horizon scores.
 
 This is exploratory research code for a small, observational cohort. Cross-validation is internal validation, not independent replication. Broad algorithm comparisons can favor a model due to sampling noise. Results are not a clinical decision tool.
 
@@ -27,6 +27,7 @@ This is exploratory research code for a small, observational cohort. Cross-valid
 | `notebooks/bayesian_classification_pymc.ipynb` | Bayesian logistic classification with PyMC |
 | `notebooks/bayesian_survival_analysis.ipynb` | Weibull AFT survival model with right-censoring |
 | `src/pro_gradu/survival.py` | Censoring-aware Cox PH prediction API and nested validation |
+| `src/pro_gradu/survival_validation.py` | Nested Cox PH and Weibull AFT evaluation with IPCW metrics |
 | `src/pro_gradu/cli.py` | Fit, predict, and validate command-line interface |
 | `src/pro_gradu/` | Data validation, feature construction, workflows, model registry, and evaluation |
 | `tests/` | Dataset contract, leakage-sensitive workflow, nested evaluation, and model registry tests |
@@ -97,15 +98,15 @@ uv run pro-gradu predict-survival patients.csv --model models/cox.joblib --horiz
 
 The prediction output is long-form: each input row has a `survival_probability` and `event_risk` (`1 - survival_probability`) for each requested day horizon. Horizons must be positive and cannot exceed the maximum follow-up observed in the training data. The default L2 penalty is 1.0; the nested validation selected it in four of five outer folds, but this small-sample result is not claimed to be globally optimal.
 
-Run nested, event-stratified validation and write fold metrics, one out-of-fold risk score per row, a proportional-hazards diagnostic, and a JSON summary:
+Run nested, event-stratified validation and write fold metrics, cross-fitted horizon predictions, calibration bins, a proportional-hazards diagnostic, and a JSON summary:
 
 ```powershell
 uv run pro-gradu validate-survival heart_failure_clinical_records_dataset.csv --output-dir results/survival-validation
 ```
 
-Inner folds select the L2 penalty using Harrell's concordance; outer folds estimate held-out concordance. Censored records contribute their observed durations and censoring indicators. The Schoenfeld-residual diagnostic is descriptive, especially with only 299 patients. These internal cross-validation estimates are not external validation, and predictions are exploratory rather than clinical guidance. Only load model artifacts that you trust because joblib artifacts use Python pickle internally.
+The validator compares ridge-penalized Cox PH and Weibull AFT models on the same event-stratified folds. Inner folds select each model's penalty using Harrell's concordance. Outer-fold outputs include concordance and IPCW Brier scores at 90 and 180 days by default; `--horizons 60,120` changes the prespecified horizons. Censoring weights are estimated from each outer training fold. The calibration CSV groups the cross-fitted predictions into up to five risk bins and reports weighted predicted and observed event rates. These internal estimates are exploratory, especially with 299 patients, and are not external validation or clinical guidance. Only load model artifacts that you trust because joblib artifacts use Python pickle internally.
 
-With the bundled data, seed 42, five outer folds, four inner folds, and penalties `0.01`, `0.1`, and `1.0`, the engine obtained mean outer-fold Harrell concordance of **0.711** (fold SD **0.067**); the most frequently selected penalty was **1.0**. This is a small-cohort internal estimate, not an independent performance claim.
+Validation writes `model_comparison_fold_metrics.csv`, `model_comparison_predictions.csv`, `calibration.csv`, `proportional_hazards.csv`, and `summary.json` under the output directory. `fold_metrics.csv` and `out_of_fold_predictions.csv` retain their previous Cox-only format for compatibility. The proportional-hazards diagnostic is computed for the full-data Cox fit only. The prediction CLI still uses the saved Cox model; Weibull AFT is currently included in validation rather than artifact-based prediction.
 
 ## Evaluation details
 
@@ -122,3 +123,4 @@ The included CSV is the UCI Heart Failure Clinical Records dataset. Please cite 
 > Chicco, D. and Jurman, G. (2020). Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone. *BMC Medical Informatics and Decision Making*, 20, 16. https://doi.org/10.1186/s12911-020-1023-5
 
 The dataset license applies to the data. It does not set a software license for this repository.
+
