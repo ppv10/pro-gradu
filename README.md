@@ -108,6 +108,10 @@ The validator compares ridge-penalized Cox PH and Weibull AFT models on the same
 
 Validation writes `model_comparison_fold_metrics.csv`, `model_comparison_predictions.csv`, `calibration.csv`, `proportional_hazards.csv`, and `summary.json` under the output directory. `fold_metrics.csv` and `out_of_fold_predictions.csv` retain their previous Cox-only format for compatibility. The proportional-hazards diagnostic is computed for the full-data Cox fit only. The prediction CLI still uses the saved Cox model; Weibull AFT is currently included in validation rather than artifact-based prediction.
 
+## Survival validation results
+
+The run recorded on 2026-10-18 compared Cox PH and Weibull AFT on the bundled data. Both had mean outer Harrell C-index near 0.711; Cox had slightly lower pooled IPCW Brier scores at 90 and 180 days. The difference is small relative to fold variability and does not show improvement over a historical baseline. See the [full validation findings](reports/survival-validation-2026-10-18.md) for fold design, metrics, calibration, and interpretation.
+
 ## Evaluation details
 
 - The primary classification target is `DEATH_EVENT = 1` (an observed death event); the negative class is 0.
